@@ -1,49 +1,24 @@
+import logging
 import random
 import streamlit as st
 # FIX: Moved get_range_for_difficulty into logic_utils.py as the single source of truth;
 # I described the refactor and Claude (agent mode) deleted the duplicate here and imported it.
-from logic_utils import check_guess, get_range_for_difficulty
+from logic_utils import (
+    check_guess,
+    get_attempt_limit,
+    get_range_for_difficulty,
+    parse_guess,
+    update_score,
+)
+from coach import get_coach_hint, set_up_logging
 
-
-def parse_guess(raw: str):
-    if raw is None:
-        return False, None, "Enter a guess."
-
-    if raw == "":
-        return False, None, "Enter a guess."
-
-    try:
-        if "." in raw:
-            value = int(float(raw))
-        else:
-            value = int(raw)
-    except Exception:
-        return False, None, "That is not a number."
-
-    return True, value, None
-
-
-def update_score(current_score: int, outcome: str, attempt_number: int):
-    if outcome == "Win":
-        points = 100 - 10 * (attempt_number + 1)
-        if points < 10:
-            points = 10
-        return current_score + points
-
-    if outcome == "Too High":
-        if attempt_number % 2 == 0:
-            return current_score + 5
-        return current_score - 5
-
-    if outcome == "Too Low":
-        return current_score - 5
-
-    return current_score
+set_up_logging()
+log = logging.getLogger("coach")
 
 st.set_page_config(page_title="Glitchy Guesser", page_icon="🎮")
 
 st.title("🎮 Game Glitch Investigator")
-st.caption("An AI-generated guessing game. Something is off.")
+st.caption("A number-guessing game with an AI coach that checks its own hints.")
 
 st.sidebar.header("Settings")
 
@@ -54,17 +29,28 @@ difficulty = st.sidebar.selectbox(
     filter_mode=None,  # FIX: I asked for a plain dropdown (no search box); Claude suggested filter_mode=None.
 )
 
-attempt_limit_map = {
-    "Easy": 6,
-    "Normal": 8,
-    "Hard": 5,
-}
-attempt_limit = attempt_limit_map[difficulty]
+attempt_limit = get_attempt_limit(difficulty)
 
 low, high = get_range_for_difficulty(difficulty)
 
 st.sidebar.caption(f"Range: {low} to {high}")
 st.sidebar.caption(f"Attempts allowed: {attempt_limit}")
+
+hint_mode = st.sidebar.radio(
+    "Hints",
+    ["AI Coach", "Basic", "Off"],
+    help="AI Coach plans the next guess and checks it before showing it. "
+         "Basic is the original Higher/Lower hint.",
+)
+
+
+def reset_game():
+    st.session_state.secret = random.randint(low, high)
+    st.session_state.attempts = 0
+    st.session_state.status = "playing"
+    st.session_state.history = []
+    st.session_state.turns = []  # (guess, outcome) pairs: all the coach is allowed to see
+
 
 # FIX: Secret was generated once and could fall outside the selected range. Claude diagnosed it
 # when I reported the bug; I approved the fix, and Claude verified it with a headless AppTest run.
@@ -72,22 +58,10 @@ st.sidebar.caption(f"Attempts allowed: {attempt_limit}")
 # matches the selected range.
 if st.session_state.get("game_difficulty") != difficulty:
     st.session_state.game_difficulty = difficulty
-    st.session_state.secret = random.randint(low, high)
-    st.session_state.attempts = 0
-    st.session_state.status = "playing"
-    st.session_state.history = []
-
-if "attempts" not in st.session_state:
-    st.session_state.attempts = 0
+    reset_game()
 
 if "score" not in st.session_state:
     st.session_state.score = 0
-
-if "status" not in st.session_state:
-    st.session_state.status = "playing"
-
-if "history" not in st.session_state:
-    st.session_state.history = []
 
 st.subheader("Make a guess")
 
@@ -103,6 +77,39 @@ def show_info():
         f"Guess a number between {low} and {high}. "
         f"Attempts left: {attempt_limit - st.session_state.attempts}"
     )
+
+
+def show_coach():
+    """Run the coach's plan -> act -> check loop and display its hint."""
+    try:
+        hint = get_coach_hint(
+            st.session_state.turns,
+            low,
+            high,
+            attempt_limit - st.session_state.attempts,
+        )
+    except Exception:
+        # Guardrail: a coach failure must never break the game.
+        log.exception("Coach crashed; showing no coach hint")
+        st.warning("The coach hit an error, so no coach hint this turn.")
+        return
+
+    if hint.status == "done":
+        return
+    with st.container(border=True):
+        st.markdown(f"**🧠 AI Coach:** {hint.message}")
+        if hint.status == "fallback":
+            st.caption("The coach could not verify a suggestion, so it fell back to the basic hint.")
+        else:
+            st.caption(
+                f"Confidence you can still win by following the coach: {hint.confidence:.0%}"
+                + (" · suggestion was revised after a failed self-check" if hint.status == "revised" else "")
+            )
+        with st.expander("How the coach checked this hint"):
+            for name, passed in hint.checks.items():
+                st.write(("✅ " if passed else "❌ ") + name.replace("_", " "))
+            for note in hint.notes:
+                st.write("• " + note)
 
 
 with st.expander("Developer Debug Info"):
@@ -123,17 +130,11 @@ with st.form("guess_form", clear_on_submit=True):
     )
     submit = st.form_submit_button("Submit Guess 🚀")
 
-col1, col2 = st.columns(2)
-with col1:
-    new_game = st.button("New Game 🔁")
-with col2:
-    show_hint = st.checkbox("Show hint", value=True)
+new_game = st.button("New Game 🔁")
 
 if new_game:
-    st.session_state.attempts = 0
-    st.session_state.status = "playing"
-    st.session_state.history = []
-    st.session_state.secret = random.randint(low, high)
+    reset_game()
+    log.info("NEW GAME difficulty=%s", difficulty)
     st.success("New game started.")
     st.rerun()
 
@@ -152,6 +153,7 @@ if submit:
 
     if not ok:
         st.session_state.history.append(raw_guess)
+        log.info("INPUT rejected raw=%r reason=%s", raw_guess, err)
         st.error(err)
     else:
         st.session_state.history.append(guess_int)
@@ -159,8 +161,10 @@ if submit:
         # FIX: Secret was cast to str on even attempts, flipping Higher/Lower hints. I spotted the
         # odd hints; Claude found the str() cast and removed it, then re-tested with secret=14, guess=5.
         outcome, message = check_guess(guess_int, st.session_state.secret)
+        st.session_state.turns.append((guess_int, outcome))
+        log.info("GUESS %s -> %s", guess_int, outcome)
 
-        if show_hint:
+        if hint_mode != "Off":
             st.warning(message)
 
         st.session_state.score = update_score(
@@ -176,14 +180,17 @@ if submit:
                 f"You won! The secret was {st.session_state.secret}. "
                 f"Final score: {st.session_state.score}"
             )
-        else:
-            if st.session_state.attempts >= attempt_limit:
-                st.session_state.status = "lost"
-                st.error(
-                    f"Out of attempts! "
-                    f"The secret was {st.session_state.secret}. "
-                    f"Score: {st.session_state.score}"
-                )
+
+    if st.session_state.status == "playing" and st.session_state.attempts >= attempt_limit:
+        st.session_state.status = "lost"
+        st.error(
+            f"Out of attempts! "
+            f"The secret was {st.session_state.secret}. "
+            f"Score: {st.session_state.score}"
+        )
+
+if hint_mode == "AI Coach" and st.session_state.status == "playing":
+    show_coach()
 
 show_info()
 
