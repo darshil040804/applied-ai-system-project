@@ -10,7 +10,7 @@ A Streamlit number-guessing game extended with an **AI Coach**: an agent that pl
 
 ## What's new in the final project
 
-| Feature | Type (from the project spec) | Where |
+| Feature | AI engineering pattern | Where |
 |---|---|---|
 | **AI Coach** that validates history, plans, proposes, self-checks, revises, and falls back | Agentic workflow | [coach.py](coach.py) |
 | Guardrail checks on every hint, safe fallback, error handling | Reliability: guardrails | [coach.py](coach.py) |
@@ -42,7 +42,7 @@ Diagram source: [diagrams/architecture.mmd](diagrams/architecture.mmd)
 Requires Python 3.10+. Tested on Python 3.14 (Windows).
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/darshil040804/applied-ai-system-project.git
 cd applied-ai-system-final
 pip install -r requirements.txt
 ```
@@ -247,7 +247,7 @@ tests\test_game_logic.py ........                                        [100%]
 
 ## Design decisions
 
-- **Offline, rule-based agent instead of an LLM API.** The project doesn't require an external API. An offline coach is free, needs no key, and gives the same answer every run, so tests and evaluation results are reproducible. The trade-off is that its hints are templated, not conversational.
+- **Deterministic agent instead of an LLM.** The Higher/Lower feedback determines exactly which numbers are still possible, and binary search is the optimal strategy, so an LLM would add cost, latency, and new failure modes (made-up or out-of-range numbers) without better hints. A deterministic agent gives the same answer every run, which makes exact, reproducible evaluation possible, and it needs no API key. The trade-off is that its hints are templated, not conversational.
 - **The coach never sees the secret.** It gets only what the player sees. Secret leakage is impossible by design, so I don't have to rely on a check that tries to catch it.
 - **Binary search as the strategy.** It's the optimal strategy for Higher/Lower. It also gives a confidence formula that can be checked: with *k* guesses left, at most 2^k − 1 numbers can be pinned down.
 - **Swappable ACT step.** `get_coach_hint(..., propose=...)` lets the evaluation inject broken proposers. In real play binary search never fails a check, so without this the guardrails would go untested.

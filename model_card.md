@@ -49,14 +49,24 @@ Full tables are in [evaluation/results.md](evaluation/results.md) and the README
 - **The guardrails never fired in real play.** All 878 hints passed on the first try. To show the checks actually work, I had to build deliberately broken proposers. Without them, the guardrail code would have been untested.
 - **Wasted attempts hurt more than I expected.** On Easy, two invalid inputs dropped the coach's confidence from 100% to 35%, before any wrong numeric guess.
 
+## Future improvements
+
+- **Smarter revision.** Make the REVISE step choose the unguessed number closest to the *midpoint* of the possible range, so a repaired hint is as strong as a normal one.
+- **Remove the secret from the UI.** Put the "Developer Debug Info" panel behind a developer flag so players can't see the secret.
+- **Score-aware coaching.** Let the coach weigh the scoring rules as well as the chance of winning, and show both.
+- **Teach, don't just tell.** Explain *why* the midpoint is the best guess (each guess halves what's left), so the player learns the strategy instead of only following it.
+- **Contradiction recovery.** When feedback contradicts itself, find the smallest set of turns to drop to make it consistent, instead of only falling back.
+
 ## Collaboration with AI
 
-I built this project with Claude Code as a coding partner.
+I used Claude Code as an agentic coding assistant. My role was the engineer: I set the constraints, made the architecture decisions, and decided what counted as "done". The assistant drafted code and docs inside those decisions.
 
-- **Design:** I gave it the project rubric and description. It proposed extensions and asked me to choose the approach, the features, and the scope before writing code.
-- **Implementation:** it wrote the coach, the evaluation script, the tests, the diagram, and the docs to the design I chose. It ran the demo, tests, and evaluation and pasted real outputs into the README.
-- **Debugging:** it tested the Streamlit app headlessly with `AppTest` to confirm the coach worked inside the real UI, not just in the CLI.
+- **Plan before generating.** Before any code was written, I had the assistant restate its understanding of the system and list the decisions it needed from me, and I held back implementation until those were settled. That brought the important trade-offs (LLM vs. offline, which AI patterns, how much scope) up front, instead of discovering them later in generated code.
+- **Explicit constraints.** I gave the assistant firm boundaries: offline only, no components the system doesn't use, and keep the existing game behavior intact. Constraints like these keep generated code focused and easier to review.
+- **Verification over trust.** Nothing was accepted because it looked right. Each piece is backed by something that runs: unit tests for the game rules and every coach step, an exhaustive evaluation over all 170 possible games, and a headless Streamlit `AppTest` run to confirm the coach works inside the real UI. Every output in the README is pasted from an actual run.
+- **Testing the guardrails adversarially.** The guardrails never fire during normal play, so their tests could have passed while the guardrails themselves were broken. The design makes the ACT step swappable, so the evaluation can inject broken proposers (repeated guesses, out-of-range numbers, crashes, text) and prove that the check → revise → fallback loop catches each one.
+- **Observability.** Every agent step is logged with its inputs and decision, so a wrong hint can be traced back to the exact step that produced it.
 
-**A suggestion I accepted:** combining an agentic coach (plan → act → check) with a reliability harness (guardrails, confidence score, evaluation script). It covers both the "agentic workflow" and the "reliability/testing" feature types in one integrated component. The checks also give the agent something real to verify about its own output.
+**A suggestion I accepted:** combining an agentic coach (plan → act → check) with a reliability harness (guardrails, confidence score, evaluation). The two strengthen each other. The guardrails give the agent a precise, testable definition of a correct hint, and the agent loop gives the guardrails a natural place to run: between proposing a hint and showing it.
 
-**A suggestion I did not accept as written:** Claude recommended building the coach on the Claude API (an LLM), with an offline fallback. I didn't take that. The project doesn't require an external API, and a fully offline coach needs no key, costs nothing, and gives the same output every run, so the tests and evaluation numbers are reproducible. I also scoped down its first plan. It included RAG over a strategy knowledge base and a human-evaluation round. I left both out because they weren't required, and one well-tested feature pair was a better fit than more components.
+**A suggestion I did not accept as written:** the assistant recommended building the coach on an LLM (the Claude API) with an offline fallback. I chose a deterministic agent instead. In this game, the Higher/Lower feedback determines exactly which numbers are still possible, and binary search is provably the optimal strategy. An LLM would add nondeterminism, cost, latency, and new failure modes (made-up or out-of-range numbers) without improving the hints. A deterministic agent also allows *exact* evaluation: the same input always gives the same hint, so the evaluation numbers are reproducible. I also scoped down the assistant's first plan, which included RAG over a strategy knowledge base and a human-evaluation round. Retrieval adds nothing here, because everything the coach needs is already in the turn history. Human review is weaker than an exhaustive check when every possible game (170 of them) can be evaluated automatically.
