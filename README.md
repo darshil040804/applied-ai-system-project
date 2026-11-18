@@ -43,7 +43,7 @@ Requires Python 3.10+. Tested on Python 3.14 (Windows).
 
 ```bash
 git clone https://github.com/darshil040804/applied-ai-system-project.git
-cd applied-ai-system-final
+cd applied-ai-system-project
 pip install -r requirements.txt
 ```
 
