@@ -1,0 +1,36 @@
+flowchart TD
+    Player([👤 Player]) -->|types a guess| UI["Streamlit UI<br/>app.py"]
+    CLI(["demo.py<br/>CLI replay"]) -->|scripted guesses| Rules
+
+    UI -->|raw text| Rules["Game rules<br/>logic_utils.py<br/>parse_guess · check_guess · update_score"]
+    Secret[("Secret number<br/>session state")] --> Rules
+    Rules -->|"Too High / Too Low / Win"| Turns[("Turn history<br/>(guess, outcome) pairs")]
+
+    subgraph Coach["AI Coach agent · coach.py (never sees the secret)"]
+        direction TB
+        V["1 · VALIDATE<br/>drop bad turns"] --> P["2 · PLAN<br/>narrow possible range,<br/>pick strategy"]
+        P --> A["3 · ACT<br/>propose next guess<br/>(binary search)"]
+        A --> C{"4 · CHECK<br/>guardrails pass?"}
+        C -->|no, up to 2 times| R["5 · REVISE<br/>nearest valid number"]
+        R --> C
+        C -->|still failing| F["6 · FALLBACK<br/>basic Higher/Lower hint"]
+        C -->|yes| S["Confidence score<br/>(2^attempts − 1) / range size"]
+    end
+
+    Turns --> V
+    S -->|hint + confidence + check results| UI
+    F -->|basic hint| UI
+    UI -->|shows hint, confidence,<br/>and passed checks| Player
+
+    Coach -. every step .-> Log[("logs/coach.log")]
+
+    subgraph Testing["Testing · checks the AI's results"]
+        Pytest["pytest<br/>tests/"]
+        Eval["evaluation/evaluate_coach.py<br/>every secret + guardrail scenarios"]
+    end
+    Pytest -.-> Rules
+    Pytest -.-> Coach
+    Eval -.-> Coach
+    Eval --> Report[("evaluation/results.md")]
+    Report --> Dev([👤 Developer reviews results and logs])
+    Log --> Dev
